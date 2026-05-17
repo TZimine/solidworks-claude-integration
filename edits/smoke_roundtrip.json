@@ -1,0 +1,20 @@
+{
+  "_comment": "Idempotent dispatch-coverage smoke. Touches every apply_edit op that can be exercised without changing state. Should exit 0 with mass_drift=no and .bak deleted. Run after any change to apply_edit.py or _sw.py. Note: set_dimension values match the current testpart geometry; if the part has been resized, update them.",
+  "target_file": "D:/ClaudeProjects/TS2/models/working/testpart.SLDPRT",
+  "operations": [
+    {"op": "rename_feature",           "name": "Base",             "new_name": "__TMP_BASE"},
+    {"op": "rename_feature",           "name": "__TMP_BASE",       "new_name": "Base"},
+
+    {"op": "set_dimension",            "name": "D1@Base",          "value": 100, "units": "mm"},
+    {"op": "set_dimension",            "name": "D2@Base",          "value": 50,  "units": "mm"},
+    {"op": "set_dimension",            "name": "D1@Wall",          "value": 15,  "units": "mm"},
+    {"op": "set_dimension",            "name": "D1@Boss-Extrude1", "value": 10,  "units": "mm"},
+
+    {"op": "set_dimension_tolerance",  "name": "D1@Boss-Extrude1", "type": "NONE"},
+
+    {"op": "suppress_feature",         "name": "Hole2"},
+    {"op": "unsuppress_feature",       "name": "Hole2"},
+
+    {"op": "set_active_configuration", "name": "Default"}
+  ]
+}

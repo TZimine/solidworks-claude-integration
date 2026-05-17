@@ -1,0 +1,10 @@
+{
+  "_comment": "Reference example for drill_hole. Adds a single M2 clearance hole (Ø2.4 mm) through the top face of the Base step. Coords are in mm in the part's coordinate frame; (0, 0, top-face-z) is the existing Ø10 hole's center. face_point_mm must land on a face — pick any point inside the face you want drilled. NOT idempotent: each run adds a new Hole<n> feature. Uses SimpleHole2 under the hood (see STATUS open threads re: HoleWzd).",
+  "target_file": "D:/ClaudeProjects/TS2/models/working/testpart.SLDPRT",
+  "operations": [
+    {"op": "drill_hole",
+     "face_point_mm": [30, 0, 10],
+     "diameter_mm": 2.4,
+     "end_condition": "through_all"}
+  ]
+}

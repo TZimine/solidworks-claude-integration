@@ -1,0 +1,26 @@
+# Generated outputs — regenerated on every script run
+outputs/snapshots/*
+outputs/renders/*
+outputs/logs/*
+!outputs/snapshots/.gitkeep
+!outputs/renders/.gitkeep
+!outputs/logs/.gitkeep
+
+# SolidWorks backup files created by apply_edit (deleted on clean success;
+# may linger if a run crashes mid-edit)
+*.bak
+
+# SolidWorks lock files
+~$*
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Claude Code local settings (machine-specific)
+.claude/settings.local.json
+
+# OS
+.DS_Store
+Thumbs.db

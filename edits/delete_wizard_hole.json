@@ -1,0 +1,8 @@
+{
+  "_comment": "Remove the user-placed M2 wizard hole and its orphan placement sketch. EditDelete cleans up the wizard feature's absorbed sub-sketch (Sketch7) automatically, but Sketch6 (the placement-point sketch the wizard hole referenced) is left behind and must be deleted explicitly. NOT idempotent: once these features are gone, re-running this edit fails on the first op.",
+  "target_file": "D:/ClaudeProjects/TS2/models/working/testpart.SLDPRT",
+  "operations": [
+    {"op": "delete_feature", "name": "M2 Clearance Hole1"},
+    {"op": "delete_feature", "name": "Sketch6"}
+  ]
+}

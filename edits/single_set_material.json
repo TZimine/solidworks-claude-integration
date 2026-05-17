@@ -1,0 +1,7 @@
+{
+  "_comment": "Reference example for set_material. 'database' empty string uses SolidWorks' default material library. Material name must match a library entry exactly. To clear material, pass name as empty string.",
+  "target_file": "D:/ClaudeProjects/TS2/models/working/testpart.SLDPRT",
+  "operations": [
+    {"op": "set_material", "name": "6061 Alloy", "database": ""}
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "_comment": "Apply a bilateral tolerance to a critical dimension and bump the revision property. Demonstrates set_dimension_tolerance (BILAT requires explicit min/max) + a per-configuration custom property write.",
+  "target_file": "D:/ClaudeProjects/TS2/models/working/testpart.SLDPRT",
+  "operations": [
+    {"op": "set_dimension_tolerance", "name": "D1@Wall", "type": "BILAT",
+     "min": -0.05, "max": 0.10, "units": "mm"},
+
+    {"op": "set_custom_property",     "name": "REVISION", "value": "B",
+     "config": "Default"}
+  ]
+}

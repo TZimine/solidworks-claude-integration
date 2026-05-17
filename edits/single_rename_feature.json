@@ -1,0 +1,7 @@
+{
+  "_comment": "Reference example for rename_feature. Renames the Boss-Extrude1 feature to 'BasePlate'. One-way change — to revert, run a second edit with name/new_name swapped, or chain both renames in one file (smoke_roundtrip.json shows the round-trip pattern). rename_feature validates only the op shape at pre-flight; existence and collision are checked at apply time so cross-op state changes work.",
+  "target_file": "D:/ClaudeProjects/TS2/models/working/testpart.SLDPRT",
+  "operations": [
+    {"op": "rename_feature", "name": "Boss-Extrude1", "new_name": "BasePlate"}
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "_comment": "Realistic parametric edit: shrink the Base footprint and update the file-level finish property in one batch. Demonstrates set_dimension (multiple) + set_custom_property in a single transaction. .bak rollback covers all three ops together.",
+  "target_file": "D:/ClaudeProjects/TS2/models/working/testpart.SLDPRT",
+  "operations": [
+    {"op": "set_dimension",       "name": "D1@Base", "value": 90, "units": "mm"},
+    {"op": "set_dimension",       "name": "D2@Base", "value": 45, "units": "mm"},
+    {"op": "set_custom_property", "name": "FINISH",  "value": "ANODIZE BLUE"}
+  ]
+}
