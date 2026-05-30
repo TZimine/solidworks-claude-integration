@@ -54,7 +54,7 @@ A declarative edit operation looks like this:
 ## Where to go from here
 
 - `STATUS.md` — cold-start guide and current code state
-- `QUIRKS.md` — full 20-item reference for the SolidWorks/Python COM boundary
+- `QUIRKS.md` — full reference for the SolidWorks/Python COM boundary
 - `CLAUDE.md` — working notes that guide Claude inside the repo
 
 MIT License — Timothy Zimine, 2026.

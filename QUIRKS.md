@@ -102,6 +102,10 @@ Returned `None` from every parameter combination tried (Hole/Tap, ANSI Metric/IS
 
 From a script-created sketch on Front Plane — even with the sketch explicitly re-selected by name. The sketch was created (`Sketch4` appeared in the tree) but the cut wouldn't form. Same call worked from the SW UI on the same sketch. Probably another hidden editing-context requirement. Avoid the cut-extrude route for hole-like operations; prefer `SimpleHole2`.
 
+### 21. `IModelDoc2.SetMaterialPropertyName2` is not exposed
+
+The SW API docs list `IModelDoc2.SetMaterialPropertyName2(config, database, material)`, but pywin32's typed bindings don't expose it — same shape as #17/#18. Surfaced when `apply_edit.py edits/single_set_material.json` ran: the op validated, apply attempted the call, it threw `AttributeError`, and the safety contract restored the part from `.bak`. So this one was caught by the pipeline rather than a dedicated probe. Workaround is TBD — candidates are bypassing to dynamic Dispatch (`model._oleobj_`) or reaching the material via a different method chain.
+
 ---
 
 ## Methodology note
