@@ -1,109 +1,60 @@
-# SolidWorks 2025 API Quirks
+# SolidWorks CAD-edit toolkit, driven by an AI agent
 
-Twenty undocumented or counterintuitive behaviors in the SolidWorks 2025 / pywin32 boundary that I had to discover while building this toolkit. Each is baked into the code; this document exists so the next person doesn't have to rediscover them.
+## What this is
 
-Most of these came out of probe scripts (`scripts/probe_*.py`) that read actual COM responses and compared them against what `gen_py` claimed the API would return. Where there's a workaround, it's named.
+SolidWorks is a CAD program used for designing mechanical parts; almost everyone who uses it drives it by hand from inside the application. This project is a Python toolkit that lets an AI agent (Claude Code) read, render, edit, and verify SolidWorks parts from the outside, over the Windows COM bridge that SolidWorks ships with. The toolkit produces JSON snapshots Claude can read, accepts JSON edit files Claude can write, and refuses to run an edit unless every step validates and a backup is on disk. The COM bridge is well-known among SolidWorks developers for being undocumented at the corners, which is most of what made this project interesting.
 
----
+## What I set out to prove
 
-### 1. `Dispatch("SldWorks.Application")` alone is too dynamic
+I started this project to answer two questions. First, can Claude make safe, declarative edits to a SolidWorks part — rename features, change dimensions, drill holes, swap materials — with rollback that actually rolls back when something goes wrong? CAD files are the kind of artifact you don't want a model to silently corrupt halfway through. Second, what does the SolidWorks/Python COM boundary actually behave like when you hit it from outside the SW UI? The documentation and the typed Python bindings disagree in places, and I wanted to find out where.
 
-The deep API surface (`model.Extension`, mass props, mate manager, …) requires typed bindings. `_sw.connect()` does `gencache.EnsureModule` + a manual cast via `mod.ISldWorks(disp._oleobj_)`. `EnsureDispatch` doesn't work because the COM object doesn't expose `IProvideClassInfo`.
+## How it works
 
-### 2. `makepy` must include the main `sldworks.tlb`
+The toolkit is four short Python scripts sitting on top of one shared helper (`_sw.py`). `describe_model.py` walks the open part and writes a JSON snapshot of every feature, dimension, custom property, and configuration. `render_views.py` saves PNGs of the standard views so Claude has something visual to refer to. `apply_edit.py` reads a JSON edit file — a list of declarative operations — and applies them with a validate-everything-first / `.bak`-before-write / post-edit rebuild-check / rollback-on-failure contract. `rebuild_check.py` runs that rebuild check and is also a module `apply_edit.py` imports. The shared helper `_sw.py` is where every workaround for COM's rough edges lives in one place — the four scripts above all go through it, so they don't each have to know the quirks.
 
-…not just the SwAddin typelib. Regenerate with:
+```mermaid
+flowchart LR
+    CC[Claude Code]
+    JSON_S[(JSON snapshot)]
+    JSON_E[(JSON edit)]
+    PY[Python scripts]
+    COM[pywin32 / COM]
+    SW[SolidWorks]
+    MODEL[(.SLDPRT files)]
 
-```
-py -m win32com.client.makepy "C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\sldworks.tlb"
-```
-
-Cached at `%LOCALAPPDATA%\Temp\gen_py\3.14\…`.
-
-### 3. Property vs method ambiguity flips between dispatch modes
-
-With dynamic dispatch, names like `RevisionNumber`, `GetTitle`, `GetType`, `GetTypeName2`, `IsSuppressed` come back as plain values. With typed dispatch they're bound methods. `_sw.prop(obj, name)` handles both — returns primitives directly, calls callables. Use it for any single-name accessor.
-
-### 4. Most `GetXxx` calls that return COM objects return untyped `CDispatch` wrappers
-
-`FirstFeature`, `GetNextFeature`, `GetFirstSubFeature`, `GetNextSubFeature`, `GetFirstDisplayDimension`, `GetDimension`, etc. Wrap them with `_sw.cast(disp, "IFeature")` / `IDisplayDimension` / `IDimension` before continuing the walk, otherwise the next call silently fails with *"Member not found"*.
-
-### 5. `OpenDoc6` byref args
-
-Pass plain `0`s for errors/warnings (not VARIANT byref objects); the typed call returns a tuple `(model, errors, warnings)`. Implemented in `_sw.open_doc`, which also auto-detects part/asm/drawing from the extension.
-
-### 6. Mass properties use British spelling
-
-`PrincipleMomentsOfInertia`, `PrincipleAxesOfInertia(axisIndex)` (note "ple", not "pal"). `IMassProperty2` has modern `Principal…` names but isn't auto-cast — needs a manual `_sw.cast`.
-
-### 7. `IDisplayDimension::GetNext{,2,3,4,5}` does not reliably traverse all dimensions
-
-In SW 2025, every variant returned `None` after the first dim. `describe_model.py` works around this by brute-forcing `model.Parameter("Dn@feat")` for `n=1..20` per feature, then deduping by `FullName`. The linked-list walk is kept as a fallback for custom-named dims.
-
-### 8. `CustomPropertyManager.GetNames()` returns `None` (not `()`) when empty
-
-Use `cpm.GetNames() or ()`. `Get6(name, useCached=False)` returns a 5-tuple `(retcode, value, resolved, was_resolved, link)`.
-
-### 9. Dimensions come in two flavours
-
-`dim.Value` is in document units (mm here), `dim.SystemValue` is SI (m). Tolerances (`GetToleranceValues()`) come back in m. `describe_model.py` records both.
-
-### 10. Sketches appear twice in the feature tree
-
-Top-level *and* as a sub-feature of the absorbing extrude. Dedupe by `feat.GetID()`.
-
-### 11. `Feature.GetWarningCode` does not exist
-
-Not on `IFeature` in SW 2025 typed bindings. Use `Feature.GetErrorCode2()` instead — it returns a 2-tuple `(error_code: int, has_warning: bool)`, so error and warning state come from one call.
-
-### 12. `ModelDoc2.Save3` returns the byref tuple under typed bindings
-
-Same pattern as `OpenDoc6`. Pass plain `0`s for errors/warnings and unpack:
-
-```python
-(ok, errors, warnings) = model.Save3(1, 0, 0)
+    CC -- reads --> JSON_S
+    CC -- writes --> JSON_E
+    JSON_E --> PY
+    PY <--> COM
+    COM <--> SW
+    SW <--> MODEL
+    PY -- emits --> JSON_S
 ```
 
-Plain `Save()` returned `False` after a successful write because pywin32 surfaced the byref tuple where a bool was expected.
+A declarative edit operation looks like this:
 
-### 13. `ModelDoc2.GetUpdateStamp` is a method, not a property
-
-In typed bindings — `_sw.prop` handles both. The stamp advances by ~18 per `ForceRebuild3` even when geometry is unchanged, so it's a "did SW recompute" signal, not a "did anything change" signal.
-
-### 14. `ShowConfiguration2` returns `False` if the named configuration is already active
-
-That's a no-op success, not a failure. `apply_edit.py` logs the return code but does not treat `False` as an error here.
-
-### 15. Mass-drift detection measures stability across a rebuild, not across an edit
-
-`rebuild_check.py` samples mass before and after `ForceRebuild3` on the *currently-open model*. `apply_edit` triggers SW's internal rebuild during `Save3`, so by the time `rebuild_check.check_open_model` samples mass-before, the geometry is already stable post-edit — `drifted=no` is the expected outcome of a successful edit. To verify edits actually took effect, diff `outputs/snapshots/<part>.json` before and after.
-
-### 16. `IDimension.SetToleranceType(0)` clears the tolerance but retains the values
-
-Sets it to `swTolNONE`, but `GetToleranceValues()` still returns the previously-set `(min_m, max_m)` afterwards — SW retains them internally even though the type is `NONE`. Snapshots show `type: "NONE"` and the values are effectively inert. If you switch a dim back to `BILAT`/`LIMIT` the old values would resurface, so always pair a tol-type set with explicit `min`/`max` when re-enabling.
-
-### 17. `IModelDoc2.FeatureByName` is not exposed
-
-In SW 2025 typed bindings even though the SW API docs list it. Use `_sw.feature_by_name(model, name)` which walks `FirstFeature`/`GetNextFeature` (and sub-features) and matches by `.Name`.
-
-### 18. `IModelDoc2.GetBodies2` is not exposed either
-
-Cast the model to `IPartDoc` first:
-
-```python
-_sw.cast(model, "IPartDoc").GetBodies2(0, True)
+```json
+{"op": "set_dimension", "name": "D1@Base", "value": 100, "units": "mm"}
 ```
 
-### 19. `HoleWizard5` returns `None` from external Automation
+## What I learned
 
-Returned `None` from every parameter combination tried (Hole/Tap, ANSI Metric/ISO, several `FastenerTypeIndex` values, even Legacy with explicit diameter). There are pre-conditions that aren't documented in the gen_py signature — likely an editing-context state. `IFeatureManager.SimpleHole2` works reliably and is what `apply_edit.drill_hole` uses.
+**On editing safely.** The validate-all-first / `.bak`-before-write / rebuild-check-after / rollback-on-failure contract works. `apply_edit.py` aborts the entire batch if any single operation fails its validation pass; if a validated operation throws at apply time, the file is restored from backup. The smoke roundtrip in `edits/smoke_roundtrip.json` exercises six dispatch paths in one idempotent batch: `rename_feature`, `set_dimension`, `set_dimension_tolerance`, `suppress_feature`, `unsuppress_feature`, and `set_active_configuration`. Single-op edits in `edits/` run clean for `drill_hole` and `rename`. The `set_material` attempt rolled back when `SetMaterialPropertyName2` turned out not to be exposed on the typed bindings — a 21st quirk surfaced during verification rather than corrupting the file, which is exactly what the safety contract is for. `delete_wizard_hole` rolled back because the target feature had already been deleted in a prior session, which is correct idempotent behavior.
 
-### 20. `IFeatureManager.FeatureCut4` also returns `None` from script context
+**On the COM boundary.** The Windows COM bridge gives Python a list of method names to call on the SolidWorks application — over a thousand of them, with documentation that mostly assumes you're calling them from a VBA macro inside SolidWorks itself. From outside, things drift. I found 20 distinct issues between what the SolidWorks API docs claim and what the typed Python bindings actually do. They fall into four categories worth naming. Dispatch-mode ambiguity: depending on how Python connects to SolidWorks, the same call sometimes returns a value directly and sometimes returns a method you have to call to get the value. Every property access goes through a helper that handles both. Byref tuple returns where the docs imply a bool: `OpenDoc6` and `Save3` return `(result, errors, warnings)`, not the single value the signature suggests. Accessors the SolidWorks reference lists that aren't actually exposed: `FeatureByName` and `GetBodies2` are documented but missing, so the toolkit walks the feature tree by hand and casts the model to `IPartDoc` for body access. And creation calls that return `None` from script context with no documented preconditions: `HoleWizard5` and `FeatureCut4`. All 20 are pinned into `_sw.py` and the full catalogue lives in `QUIRKS.md`.
 
-From a script-created sketch on Front Plane — even with the sketch explicitly re-selected by name. The sketch was created (`Sketch4` appeared in the tree) but the cut wouldn't form. Same call worked from the SW UI on the same sketch. Probably another hidden editing-context requirement. Avoid the cut-extrude route for hole-like operations; prefer `SimpleHole2`.
+## What didn't fit
 
----
+- `HoleWizard5` returns `None` from external Automation across every parameter combination I tried. I fell back to `SimpleHole2`.
+- `FeatureCut4` returns `None` from script context even when the underlying sketch was created cleanly and is selected by name. The same call works from the SW UI on the same sketch.
+- `AddDimension2` and `AddAlongXDimension` hang on the Modify dialog unless `swInputDimValOnCreate` (346) is set False first. Discovered the hard way.
+- Assembly mate walking is stubbed in `describe_model.py` and `rebuild_check.py`; the toolkit has only been exercised on parts, not assemblies or drawings.
+- Mass-drift was meant to catch unintended geometric change by comparing a part's mass before and after an edit. In practice it mostly measured whether the rebuild had settled, not whether geometry actually changed the way I intended. I diff full snapshots before and after instead.
 
-## Methodology note
+## Where to go from here
 
-These were found by writing one probe script per quirk (`scripts/probe_*.py`) and reading actual COM responses against a known-good test part. The probes are kept in the repo as scratch files — they're not part of the working pipeline but they document what was tried and what worked.
+- `STATUS.md` — cold-start guide and current code state
+- `QUIRKS.md` — full 20-item reference for the SolidWorks/Python COM boundary
+- `CLAUDE.md` — working notes that guide Claude inside the repo
+
+MIT License — Timothy Zimine, 2026.
