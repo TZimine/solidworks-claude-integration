@@ -2,33 +2,39 @@
 
 ## What this is
 
-SolidWorks is a CAD program used for designing mechanical parts; almost everyone who uses it drives it by hand from inside the application. This project is a Python toolkit that lets an AI agent (Claude Code) read, render, edit, and verify SolidWorks parts from the outside, over the Windows COM bridge that SolidWorks ships with. The toolkit produces JSON snapshots Claude can read, accepts JSON edit files Claude can write, and refuses to run an edit unless every step validates and a backup is on disk. The COM bridge is well-known among SolidWorks developers for being undocumented at the corners, which is most of what made this project interesting.
+SolidWorks is a CAD program used for designing mechanical parts. Close to everyone who uses it drives it manually from inside the application. This project is a Python toolkit that lets Claude Code read, render, edit, and verify SolidWorks parts from outside the application. Claude uses the Windows COM bridge that SolidWorks includes, and produces JSON snapshots Claude can read, and edit. The COM bridge is well-known but is still undocumented at the edges which is why this project is interesting.
 
 ## What I set out to prove
 
-I started this project to answer two questions. First, can Claude make safe, declarative edits to a SolidWorks part — rename features, change dimensions, drill holes, swap materials — with rollback that actually rolls back when something goes wrong? CAD files are the kind of artifact you don't want a model to silently corrupt halfway through. Second, what does the SolidWorks/Python COM boundary actually behave like when you hit it from outside the SW UI? The documentation and the typed Python bindings disagree in places, and I wanted to find out where.
+I started this project to answer two questions. First, can Claude make edits to a SolidWorks part (rename features, change dimensions, drill holes, change materials, etc.)? Second, can I push Claude to reason complex problems and act upon thought out decisions after given a desired outcome. For example, keeping important geometry and materials constant, but reducing mass. As well as, design a bracket that needs to fit certain constraints. Generic edits have been mainly achieved, but complex problem solving with action are still something to be explored more in-depth.
 
 ## How it works
 
-The toolkit is four short Python scripts sitting on top of one shared helper (`_sw.py`). `describe_model.py` walks the open part and writes a JSON snapshot of every feature, dimension, custom property, and configuration. `render_views.py` saves PNGs of the standard views so Claude has something visual to refer to. `apply_edit.py` reads a JSON edit file — a list of declarative operations — and applies them with a validate-everything-first / `.bak`-before-write / post-edit rebuild-check / rollback-on-failure contract. `rebuild_check.py` runs that rebuild check and is also a module `apply_edit.py` imports. The shared helper `_sw.py` is where every workaround for COM's rough edges lives in one place — the four scripts above all go through it, so they don't each have to know the quirks.
+To automate SolidWorks with Claude I selected Python-based automation out of three main approaches: Model Context Protocol (MCP), Python, Batch+. Python was selected due to a good balance of flexibility, and direct access to the SolidWorks API while staying simple.
+
+The overall architecture uses JSON files as an interface between Claude and SolidWorks. First the Python toolkit extracts part information (geometry, dimensions, configurations, metadata) from the model and generates a JSON snapshot. This snapshot is used by Claude to understand the model better without direct interaction inside of SolidWorks. Standard view renders are also generated to provide visual context for more complex geometries.
+
+When a design change is requested, Claude produces a JSON edit files with required changes. The Python script layer interprets the edits and communicates with SolidWorks through the pywin32 COM interface. Before changes are made, the original model is backed up, in case of issues that may arise. The modifications are then applies, the model is rebuilt, and checks are performed to confirm there are no errors.
+
+This system enables Claude to use Python as a toolkit for interacting with SolidWorks. Claude interprets model information, generates modifications, while Python exectures the changes through SolidWorks API.
 
 ```mermaid
+---
+config:
+  layout: fixed
+---
 flowchart LR
-    CC[Claude Code]
-    JSON_S[(JSON snapshot)]
-    JSON_E[(JSON edit)]
-    PY[Python scripts]
-    COM[pywin32 / COM]
-    SW[SolidWorks]
-    MODEL[(.SLDPRT files)]
+    CC["Claude Code"] -- Reads --> JSON_S["JSON snapshot"]
+    CC -- Writes --> JSON_E["JSON edit"]
+    JSON_E --> PY["Python scripts"]
+    PY <--> COM["pywin32 / COM"]
+    COM <--> SW["SolidWorks"]
+    SW <--> MODEL[(".SLDPRT files")]
+    PY -- Emits --> JSON_S
 
-    CC -- reads --> JSON_S
-    CC -- writes --> JSON_E
-    JSON_E --> PY
-    PY <--> COM
-    COM <--> SW
-    SW <--> MODEL
-    PY -- emits --> JSON_S
+    CC@{ shape: h-cyl}
+    JSON_S@{ shape: rounded}
+    JSON_E@{ shape: rounded}
 ```
 
 A declarative edit operation looks like this:
@@ -39,17 +45,17 @@ A declarative edit operation looks like this:
 
 ## What I learned
 
-**On editing safely.** The validate-all-first / `.bak`-before-write / rebuild-check-after / rollback-on-failure contract works. `apply_edit.py` aborts the entire batch if any single operation fails its validation pass; if a validated operation throws at apply time, the file is restored from backup. The smoke roundtrip in `edits/smoke_roundtrip.json` exercises six dispatch paths in one idempotent batch: `rename_feature`, `set_dimension`, `set_dimension_tolerance`, `suppress_feature`, `unsuppress_feature`, and `set_active_configuration`. Single-op edits in `edits/` run clean for `drill_hole` and `rename`. The `set_material` attempt rolled back when `SetMaterialPropertyName2` turned out not to be exposed on the typed bindings — a 21st quirk surfaced during verification rather than corrupting the file, which is exactly what the safety contract is for. `delete_wizard_hole` rolled back because the target feature had already been deleted in a prior session, which is correct idempotent behavior.
+**Claude can successfully perform CAD operations through external toolkit - **This project showed that Claude is capable of reading information about a SolidWorks part and making changes through a Python toolkit. Common edits such as renaming features and changing dimensions were successfully performed. More tools can be added over time to expose additional SolidWorks functionality. Overall, the project demonstrated that a large language model can do more than provide suggestions — it can actually interact with CAD software and make changes to a model.
 
-**On the COM boundary.** The Windows COM bridge gives Python a list of method names to call on the SolidWorks application — over a thousand of them, with documentation that mostly assumes you're calling them from a VBA macro inside SolidWorks itself. From outside, things drift. I found 20 distinct issues between what the SolidWorks API docs claim and what the typed Python bindings actually do. They fall into four categories worth naming. Dispatch-mode ambiguity: depending on how Python connects to SolidWorks, the same call sometimes returns a value directly and sometimes returns a method you have to call to get the value. Every property access goes through a helper that handles both. Byref tuple returns where the docs imply a bool: `OpenDoc6` and `Save3` return `(result, errors, warnings)`, not the single value the signature suggests. Accessors the SolidWorks reference lists that aren't actually exposed: `FeatureByName` and `GetBodies2` are documented but missing, so the toolkit walks the feature tree by hand and casts the model to `IPartDoc` for body access. And creation calls that return `None` from script context with no documented preconditions: `HoleWizard5` and `FeatureCut4`. All 20 are pinned into `_sw.py` and the full catalogue lives in `QUIRKS.md`.
+**Simple edits achievable now, complex reasoning remains open ended - **Claude can follow instructions and perform requested design changes, but the more interesting question is whether it can make engineering decisions on its own to achieve a desired outcome. For example, reducing the mass of a part while keeping important geometry unchanged, or creating a bracket that satisfies a set of design constraints. The framework appears capable of supporting these types of tasks, but additional SolidWorks functionality needs to be integrated before they can be tested thoroughly.
+
+**Expanding toolkit is necessary for real workflows - **A large amount of development time was spent building Python tools that allow Claude to interact with SolidWorks. While the basic system works, expanding it to cover more SolidWorks features will require additional effort. Many engineering tasks are already possible, but more advanced workflows will depend on giving Claude access to a broader set of CAD operations. The project suggests that the limiting factor is often not Claude's ability to understand a problem, but whether the necessary tools exist for it to act on that understanding.
 
 ## What didn't fit
 
-- `HoleWizard5` returns `None` from external Automation across every parameter combination I tried. I fell back to `SimpleHole2`.
-- `FeatureCut4` returns `None` from script context even when the underlying sketch was created cleanly and is selected by name. The same call works from the SW UI on the same sketch.
-- `AddDimension2` and `AddAlongXDimension` hang on the Modify dialog unless `swInputDimValOnCreate` (346) is set False first. Discovered the hard way.
-- Assembly mate walking is stubbed in `describe_model.py` and `rebuild_check.py`; the toolkit has only been exercised on parts, not assemblies or drawings.
-- Mass-drift was meant to catch unintended geometric change by comparing a part's mass before and after an edit. In practice it mostly measured whether the rebuild had settled, not whether geometry actually changed the way I intended. I diff full snapshots before and after instead.
+- The original goal included seeing whether Claude could make engineering decisions to achieve a desired outcome. Most testing so far focused on building a basic toolkit and validating individual operations on CAD rather than fully exploring these workflows.
+- The current toolkit covers only a small set of SolidWorks functions. While common operations are supported, many advanced features (i.e. Hole Wizard) would require more time to integrate before complex design tasks can be attempted.
+- The project was mainly tested on part files. Assemblies, drawings, mating, and larger scope projects remain areas for development.
 
 ## Where to go from here
 
